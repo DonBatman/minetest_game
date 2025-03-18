@@ -1,15 +1,19 @@
--- Minetest 0.4 mod: bucket
+-- Minetest Game mod: bucket
 -- See README.txt for licensing and other information.
+
+-- Load support for MT game translation.
+local S = minetest.get_translator("bucket")
+
 
 minetest.register_alias("bucket", "bucket:bucket_empty")
 minetest.register_alias("bucket_water", "bucket:bucket_water")
 minetest.register_alias("bucket_lava", "bucket:bucket_lava")
 
 minetest.register_craft({
-	output = 'bucket:bucket_empty 1',
+	output = "bucket:bucket_empty 1",
 	recipe = {
-		{'default:steel_ingot', '', 'default:steel_ingot'},
-		{'', 'default:steel_ingot', ''},
+		{"default:steel_ingot", "", "default:steel_ingot"},
+		{"", "default:steel_ingot", ""},
 	}
 })
 
@@ -29,6 +33,11 @@ local function check_protection(pos, name, text)
 	return false
 end
 
+local function log_action(pos, name, action)
+	minetest.log("action", (name ~= "" and name or "A mod")
+		.. " " .. action .. " at " .. minetest.pos_to_string(pos) .. " with a bucket")
+end
+
 -- Register a new liquid
 --    source = name of the source node
 --    flowing = name of the flowing node
@@ -36,12 +45,17 @@ end
 --    inventory_image = texture of the new bucket item (ignored if itemname == nil)
 --    name = text description of the bucket item
 --    groups = (optional) groups of the bucket item, for example {water_bucket = 1}
+--    force_renew = (optional) bool. Force the liquid source to renew if it has a
+--                  source neighbour, even if defined as 'liquid_renewable = false'.
+--                  Needed to avoid creating holes in sloping rivers.
 -- This function can be called from any mod (that depends on bucket).
-function bucket.register_liquid(source, flowing, itemname, inventory_image, name, groups)
+function bucket.register_liquid(source, flowing, itemname, inventory_image, name,
+		groups, force_renew)
 	bucket.liquids[source] = {
 		source = source,
 		flowing = flowing,
 		itemname = itemname,
+		force_renew = force_renew,
 	}
 	bucket.liquids[flowing] = bucket.liquids[source]
 
@@ -64,7 +78,8 @@ function bucket.register_liquid(source, flowing, itemname, inventory_image, name
 
 				-- Call on_rightclick if the pointed node defines it
 				if ndef and ndef.on_rightclick and
-				   user and not user:get_player_control().sneak then
+						not (user and user:is_player() and
+						user:get_player_control().sneak) then
 					return ndef.on_rightclick(
 						pointed_thing.under,
 						node, user,
@@ -91,13 +106,13 @@ function bucket.register_liquid(source, flowing, itemname, inventory_image, name
 					end
 				end
 
-				if check_protection(lpos, user
-						and user:get_player_name()
-						or "", "place "..source) then
+				local pname = user and user:get_player_name() or ""
+				if check_protection(lpos, pname, "place "..source) then
 					return
 				end
 
 				minetest.set_node(lpos, {name = source})
+				log_action(lpos, pname, "placed " .. source)
 				return ItemStack("bucket:bucket_empty")
 			end
 		})
@@ -105,26 +120,29 @@ function bucket.register_liquid(source, flowing, itemname, inventory_image, name
 end
 
 minetest.register_craftitem("bucket:bucket_empty", {
-	description = "Empty Bucket",
+	description = S("Empty Bucket"),
 	inventory_image = "bucket.png",
-	stack_max = 99,
+	groups = {tool = 1},
 	liquids_pointable = true,
 	on_use = function(itemstack, user, pointed_thing)
-		-- Must be pointing to node
-		if pointed_thing.type ~= "node" then
+		if pointed_thing.type == "object" then
+			pointed_thing.ref:punch(user, 1.0, { full_punch_interval=1.0 }, nil)
+			return user:get_wielded_item()
+		elseif pointed_thing.type ~= "node" then
+			-- do nothing if it's neither object nor node
 			return
 		end
 		-- Check if pointing to a liquid source
-		local node = minetest.get_node(pointed_thing.under)
+		local pos = pointed_thing.under
+		local node = minetest.get_node(pos)
 		local liquiddef = bucket.liquids[node.name]
 		local item_count = user:get_wielded_item():get_count()
 
 		if liquiddef ~= nil
 		and liquiddef.itemname ~= nil
 		and node.name == liquiddef.source then
-			if check_protection(pointed_thing.under,
-					user:get_player_name(),
-					"take ".. node.name) then
+			local pname = user:get_player_name()
+			if check_protection(pos, pname, "take ".. node.name) then
 				return
 			end
 
@@ -139,9 +157,9 @@ minetest.register_craftitem("bucket:bucket_empty", {
 				if inv:room_for_item("main", {name=liquiddef.itemname}) then
 					inv:add_item("main", liquiddef.itemname)
 				else
-					local pos = user:getpos()
-					pos.y = math.floor(pos.y + 0.5)
-					core.add_item(pos, liquiddef.itemname)
+					local upos = user:get_pos()
+					upos.y = math.floor(upos.y + 0.5)
+					minetest.add_item(upos, liquiddef.itemname)
 				end
 
 				-- set to return empty buckets minus 1
@@ -149,9 +167,27 @@ minetest.register_craftitem("bucket:bucket_empty", {
 
 			end
 
-			minetest.add_node(pointed_thing.under, {name="air"})
+			-- force_renew requires a source neighbour
+			local source_neighbor = false
+			if liquiddef.force_renew then
+				source_neighbor =
+					minetest.find_node_near(pos, 1, liquiddef.source)
+			end
+			if source_neighbor and liquiddef.force_renew then
+				log_action(pos, pname, "picked up " .. liquiddef.source .. " (force renewed)")
+			else
+				minetest.add_node(pos, {name = "air"})
+				log_action(pos, pname, "picked up " .. liquiddef.source)
+			end
 
 			return ItemStack(giving_back)
+		else
+			-- non-liquid nodes will have their on_punch triggered
+			local node_def = minetest.registered_nodes[node.name]
+			if node_def then
+				node_def.on_punch(pos, node, user, pointed_thing)
+			end
+			return user:get_wielded_item()
 		end
 	end,
 })
@@ -161,17 +197,24 @@ bucket.register_liquid(
 	"default:water_flowing",
 	"bucket:bucket_water",
 	"bucket_water.png",
-	"Water Bucket",
-	{water_bucket = 1}
+	S("Water Bucket"),
+	{tool = 1, water_bucket = 1}
 )
+
+-- River water source is 'liquid_renewable = false' to avoid horizontal spread
+-- of water sources in sloping rivers that can cause water to overflow
+-- riverbanks and cause floods.
+-- River water source is instead made renewable by the 'force renew' option
+-- used here.
 
 bucket.register_liquid(
 	"default:river_water_source",
 	"default:river_water_flowing",
 	"bucket:bucket_river_water",
 	"bucket_river_water.png",
-	"River Water Bucket",
-	{water_bucket = 1}
+	S("River Water Bucket"),
+	{tool = 1, water_bucket = 1},
+	true
 )
 
 bucket.register_liquid(
@@ -179,7 +222,8 @@ bucket.register_liquid(
 	"default:lava_flowing",
 	"bucket:bucket_lava",
 	"bucket_lava.png",
-	"Lava Bucket"
+	S("Lava Bucket"),
+	{tool = 1}
 )
 
 minetest.register_craft({
@@ -189,3 +233,16 @@ minetest.register_craft({
 	replacements = {{"bucket:bucket_lava", "bucket:bucket_empty"}},
 })
 
+-- Register buckets as dungeon loot
+if minetest.global_exists("dungeon_loot") then
+	dungeon_loot.register({
+		{name = "bucket:bucket_empty", chance = 0.55},
+		-- water in deserts/ice or above ground, lava otherwise
+		{name = "bucket:bucket_water", chance = 0.45,
+			types = {"sandstone", "desert", "ice"}},
+		{name = "bucket:bucket_water", chance = 0.45, y = {0, 32768},
+			types = {"normal"}},
+		{name = "bucket:bucket_lava", chance = 0.45, y = {-32768, -1},
+			types = {"normal"}},
+	})
+end

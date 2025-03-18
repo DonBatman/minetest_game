@@ -1,6 +1,12 @@
+-- farming/api.lua
+
+-- support for MT game translation.
+local S = farming.get_translator
 
 -- Wear out hoes, place soil
 -- TODO Ignore group:flower
+farming.registered_plants = {}
+
 farming.hoe_on_use = function(itemstack, user, pointed_thing, uses)
 	local pt = pointed_thing
 	-- check if pointing at a node
@@ -39,24 +45,33 @@ farming.hoe_on_use = function(itemstack, user, pointed_thing, uses)
 		return
 	end
 
-	if minetest.is_protected(pt.under, user:get_player_name()) then
-		minetest.record_protection_violation(pt.under, user:get_player_name())
+	local player_name = user and user:get_player_name() or ""
+
+	if minetest.is_protected(pt.under, player_name) then
+		minetest.record_protection_violation(pt.under, player_name)
 		return
 	end
-	if minetest.is_protected(pt.above, user:get_player_name()) then
-		minetest.record_protection_violation(pt.above, user:get_player_name())
+	if minetest.is_protected(pt.above, player_name) then
+		minetest.record_protection_violation(pt.above, player_name)
 		return
 	end
 
-	-- turn the node into soil, wear out item and play sound
+	-- turn the node into soil and play sound
 	minetest.set_node(pt.under, {name = regN[under.name].soil.dry})
 	minetest.sound_play("default_dig_crumbly", {
 		pos = pt.under,
-		gain = 0.5,
-	})
+		gain = 0.3,
+	}, true)
 
-	if not minetest.setting_getbool("creative_mode") then
-		itemstack:add_wear(65535/(uses-1))
+	if not minetest.is_creative_enabled(player_name) then
+		-- wear tool
+		local wdef = itemstack:get_definition()
+		itemstack:add_wear_by_uses(uses)
+		-- tool break sound
+		if itemstack:get_count() == 0 and wdef.sound and wdef.sound.breaks then
+			minetest.sound_play(wdef.sound.breaks, {pos = pt.above,
+				gain = 0.5}, true)
+		end
 	end
 	return itemstack
 end
@@ -69,17 +84,10 @@ farming.register_hoe = function(name, def)
 	end
 	-- Check def table
 	if def.description == nil then
-		def.description = "Hoe"
+		def.description = S("Hoe")
 	end
 	if def.inventory_image == nil then
 		def.inventory_image = "unknown_item.png"
-	end
-	if def.recipe == nil then
-		def.recipe = {
-			{"air","air",""},
-			{"","group:stick",""},
-			{"","group:stick",""}
-		}
 	end
 	if def.max_uses == nil then
 		def.max_uses = 30
@@ -90,30 +98,23 @@ farming.register_hoe = function(name, def)
 		inventory_image = def.inventory_image,
 		on_use = function(itemstack, user, pointed_thing)
 			return farming.hoe_on_use(itemstack, user, pointed_thing, def.max_uses)
-		end
+		end,
+		groups = def.groups,
+		sound = {breaks = "default_tool_breaks"},
 	})
 	-- Register its recipe
-	if def.material == nil then
+	if def.recipe then
 		minetest.register_craft({
 			output = name:sub(2),
 			recipe = def.recipe
 		})
-	else
+	elseif def.material then
 		minetest.register_craft({
 			output = name:sub(2),
 			recipe = {
-				{def.material, def.material, ""},
-				{"", "group:stick", ""},
-				{"", "group:stick", ""}
-			}
-		})
-		-- Reverse Recipe
-		minetest.register_craft({
-			output = name:sub(2),
-			recipe = {
-				{"", def.material, def.material},
-				{"", "group:stick", ""},
-				{"", "group:stick", ""}
+				{def.material, def.material},
+				{"", "group:stick"},
+				{"", "group:stick"}
 			}
 		})
 	end
@@ -142,12 +143,14 @@ farming.place_seed = function(itemstack, placer, pointed_thing, plantname)
 	local under = minetest.get_node(pt.under)
 	local above = minetest.get_node(pt.above)
 
-	if minetest.is_protected(pt.under, placer:get_player_name()) then
-		minetest.record_protection_violation(pt.under, placer:get_player_name())
+	local player_name = placer and placer:get_player_name() or ""
+
+	if minetest.is_protected(pt.under, player_name) then
+		minetest.record_protection_violation(pt.under, player_name)
 		return
 	end
-	if minetest.is_protected(pt.above, placer:get_player_name()) then
-		minetest.record_protection_violation(pt.above, placer:get_player_name())
+	if minetest.is_protected(pt.above, player_name) then
+		minetest.record_protection_violation(pt.above, player_name)
 		return
 	end
 
@@ -175,12 +178,21 @@ farming.place_seed = function(itemstack, placer, pointed_thing, plantname)
 	end
 
 	-- add the node and remove 1 item from the itemstack
+	if placer then
+		default.log_player_action(placer, "places node", plantname, "at", pt.above)
+	end
 	minetest.add_node(pt.above, {name = plantname, param2 = 1})
 	tick(pt.above)
-	if not minetest.setting_getbool("creative_mode") then
+	if not minetest.is_creative_enabled(player_name) then
 		itemstack:take_item()
 	end
 	return itemstack
+end
+
+-- check if on wet soil
+farming.can_grow = function(pos)
+	local below = minetest.get_node(pos:offset(0, -1, 0))
+	return minetest.get_item_group(below.name, "soil") >= 3
 end
 
 farming.grow_plant = function(pos, elapsed)
@@ -203,7 +215,11 @@ farming.grow_plant = function(pos, elapsed)
 		-- omitted is a check for light, we assume seeds can germinate in the dark.
 		for _, v in pairs(def.fertility) do
 			if minetest.get_item_group(soil_node.name, v) ~= 0 then
-				minetest.swap_node(pos, {name = def.next_plant})
+				local placenode = {name = def.next_plant}
+				if def.place_param2 then
+					placenode.param2 = def.place_param2
+				end
+				minetest.swap_node(pos, placenode)
 				if minetest.registered_nodes[def.next_plant].next_plant then
 					tick(pos)
 					return
@@ -214,9 +230,7 @@ farming.grow_plant = function(pos, elapsed)
 		return
 	end
 
-	-- check if on wet soil
-	local below = minetest.get_node({x = pos.x, y = pos.y - 1, z = pos.z})
-	if minetest.get_item_group(below.name, "soil") < 3 then
+	if not (def.can_grow or farming.can_grow)(pos) then
 		tick_again(pos)
 		return
 	end
@@ -229,7 +243,11 @@ farming.grow_plant = function(pos, elapsed)
 	end
 
 	-- grow
-	minetest.swap_node(pos, {name = def.next_plant})
+	local placenode = {name = def.next_plant}
+	if def.place_param2 then
+		placenode.param2 = def.place_param2
+	end
+	minetest.swap_node(pos, placenode)
 
 	-- new timer needed?
 	if minetest.registered_nodes[def.next_plant].next_plant then
@@ -245,7 +263,10 @@ farming.register_plant = function(name, def)
 
 	-- Check def table
 	if not def.description then
-		def.description = "Seed"
+		def.description = S("Seed")
+	end
+	if not def.harvest_description then
+		def.harvest_description = pname:gsub("^%l", string.upper)
 	end
 	if not def.inventory_image then
 		def.inventory_image = "unknown_item.png"
@@ -263,9 +284,11 @@ farming.register_plant = function(name, def)
 		def.fertility = {}
 	end
 
+	farming.registered_plants[pname] = def
+
 	-- Register seed
 	local lbm_nodes = {mname .. ":seed_" .. pname}
-	local g = {seed = 1, snappy = 3, attached_node = 1}
+	local g = {seed = 1, snappy = 3, attached_node = 1, flammable = 2}
 	for k, v in pairs(def.fertility) do
 		g[v] = 1
 	end
@@ -278,6 +301,7 @@ farming.register_plant = function(name, def)
 		groups = g,
 		paramtype = "light",
 		paramtype2 = "wallmounted",
+		place_param2 = def.place_param2 or nil, -- this isn't actually used for placement
 		walkable = false,
 		sunlight_propagates = true,
 		selection_box = {
@@ -286,11 +310,22 @@ farming.register_plant = function(name, def)
 		},
 		fertility = def.fertility,
 		sounds = default.node_sound_dirt_defaults({
+			dig = {name = "", gain = 0},
 			dug = {name = "default_grass_footstep", gain = 0.2},
 			place = {name = "default_place_node", gain = 0.25},
 		}),
 
 		on_place = function(itemstack, placer, pointed_thing)
+			local under = pointed_thing.under
+			local node = minetest.get_node(under)
+			local udef = minetest.registered_nodes[node.name]
+			if udef and udef.on_rightclick and
+					not (placer and placer:is_player() and
+					placer:get_player_control().sneak) then
+				return udef.on_rightclick(under, node, placer, itemstack,
+					pointed_thing) or itemstack
+			end
+
 			return farming.place_seed(itemstack, placer, pointed_thing, mname .. ":seed_" .. pname)
 		end,
 		next_plant = mname .. ":" .. pname .. "_1",
@@ -301,18 +336,23 @@ farming.register_plant = function(name, def)
 
 	-- Register harvest
 	minetest.register_craftitem(":" .. mname .. ":" .. pname, {
-		description = pname:gsub("^%l", string.upper),
+		description = def.harvest_description,
 		inventory_image = mname .. "_" .. pname .. ".png",
+		groups = def.groups or {flammable = 2},
 	})
 
 	-- Register growing steps
 	for i = 1, def.steps do
+		local base_rarity = 1
+		if def.steps ~= 1 then
+			base_rarity =  8 - (i - 1) * 7 / (def.steps - 1)
+		end
 		local drop = {
 			items = {
-				{items = {mname .. ":" .. pname}, rarity = 9 - i},
-				{items = {mname .. ":" .. pname}, rarity= 18 - i * 2},
-				{items = {mname .. ":seed_" .. pname}, rarity = 9 - i},
-				{items = {mname .. ":seed_" .. pname}, rarity = 18 - i * 2},
+				{items = {mname .. ":" .. pname}, rarity = base_rarity},
+				{items = {mname .. ":" .. pname}, rarity = base_rarity * 2},
+				{items = {mname .. ":seed_" .. pname}, rarity = base_rarity},
+				{items = {mname .. ":seed_" .. pname}, rarity = base_rarity * 2},
 			}
 		}
 		local nodegroups = {snappy = 3, flammable = 2, plant = 1, not_in_creative_inventory = 1, attached_node = 1}
@@ -325,11 +365,13 @@ farming.register_plant = function(name, def)
 			lbm_nodes[#lbm_nodes + 1] = mname .. ":" .. pname .. "_" .. i
 		end
 
-		minetest.register_node(mname .. ":" .. pname .. "_" .. i, {
+		minetest.register_node(":" .. mname .. ":" .. pname .. "_" .. i, {
 			drawtype = "plantlike",
 			waving = 1,
 			tiles = {mname .. "_" .. pname .. "_" .. i .. ".png"},
 			paramtype = "light",
+			paramtype2 = def.paramtype2 or nil,
+			place_param2 = def.place_param2 or nil,
 			walkable = false,
 			buildable_to = true,
 			drop = drop,

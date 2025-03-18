@@ -1,3 +1,8 @@
+-- default/trees.lua
+
+-- support for MT game translation.
+local S = default.get_translator
+
 local random = math.random
 
 --
@@ -11,9 +16,7 @@ function default.can_grow(pos)
 	if not node_under then
 		return false
 	end
-	local name_under = node_under.name
-	local is_soil = minetest.get_item_group(name_under, "soil")
-	if is_soil == 0 then
+	if minetest.get_item_group(node_under.name, "soil") == 0 then
 		return false
 	end
 	local light_level = minetest.get_node_light(pos)
@@ -23,75 +26,18 @@ function default.can_grow(pos)
 	return true
 end
 
+function default.on_grow_failed(pos)
+	minetest.get_node_timer(pos):start(300)
+end
+
 
 -- 'is snow nearby' function
 
 local function is_snow_nearby(pos)
-	return #minetest.find_nodes_in_area(
-		{x = pos.x - 1, y = pos.y - 1, z = pos.z - 1},
-		{x = pos.x + 1, y = pos.y + 1, z = pos.z + 1},
-		{"default:snow", "default:snowblock", "default:dirt_with_snow"}) > 0
+	return minetest.find_node_near(pos, 1, {"group:snowy"})
 end
 
 
--- Sapling ABM
-
-function default.grow_sapling(pos)
-	if not default.can_grow(pos) then
-		-- try a bit later again
-		minetest.get_node_timer(pos):start(math.random(240, 600))
-		return
-	end
-
-	local mg_name = minetest.get_mapgen_setting("mg_name")
-	local node = minetest.get_node(pos)
-	if node.name == "default:sapling" then
-		minetest.log("action", "A sapling grows into a tree at "..
-			minetest.pos_to_string(pos))
-		if mg_name == "v6" then
-			default.grow_tree(pos, random(1, 4) == 1)
-		else
-			default.grow_new_apple_tree(pos)
-		end
-	elseif node.name == "default:junglesapling" then
-		minetest.log("action", "A jungle sapling grows into a tree at "..
-			minetest.pos_to_string(pos))
-		if mg_name == "v6" then
-			default.grow_jungle_tree(pos)
-		else
-			default.grow_new_jungle_tree(pos)
-		end
-	elseif node.name == "default:pine_sapling" then
-		minetest.log("action", "A pine sapling grows into a tree at "..
-			minetest.pos_to_string(pos))
-		local snow = is_snow_nearby(pos)
-		if mg_name == "v6" then
-			default.grow_pine_tree(pos, snow)
-		elseif snow then
-			default.grow_new_snowy_pine_tree(pos)
-		else
-			default.grow_new_pine_tree(pos)
-		end
-	elseif node.name == "default:acacia_sapling" then
-		minetest.log("action", "An acacia sapling grows into a tree at "..
-			minetest.pos_to_string(pos))
-		default.grow_new_acacia_tree(pos)
-	elseif node.name == "default:aspen_sapling" then
-		minetest.log("action", "An aspen sapling grows into a tree at "..
-			minetest.pos_to_string(pos))
-		default.grow_new_aspen_tree(pos)
-	end
-end
-
-minetest.register_lbm({
-	name = "default:convert_saplings_to_node_timer",
-	nodenames = {"default:sapling", "default:junglesapling",
-			"default:pine_sapling", "default:acacia_sapling",
-			"default:aspen_sapling"},
-	action = function(pos)
-		minetest.get_node_timer(pos):start(math.random(1200, 2400))
-	end
-})
 
 --
 -- Tree generation
@@ -188,7 +134,6 @@ function default.grow_tree(pos, is_apple_tree, bad)
 	vm:write_to_map()
 	vm:update_map()
 end
-
 
 -- Jungle tree
 
@@ -374,8 +319,8 @@ end
 function default.grow_new_apple_tree(pos)
 	local path = minetest.get_modpath("default") ..
 		"/schematics/apple_tree_from_sapling.mts"
-	minetest.place_schematic({x = pos.x - 2, y = pos.y - 1, z = pos.z - 2},
-		path, "0", nil, false)
+	minetest.place_schematic({x = pos.x - 3, y = pos.y - 1, z = pos.z - 3},
+		path, "random", nil, false)
 end
 
 
@@ -389,11 +334,27 @@ function default.grow_new_jungle_tree(pos)
 end
 
 
+-- New emergent jungle tree
+
+function default.grow_new_emergent_jungle_tree(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/emergent_jungle_tree_from_sapling.mts"
+	minetest.place_schematic({x = pos.x - 3, y = pos.y - 5, z = pos.z - 3},
+		path, "random", nil, false)
+end
+
+
 -- New pine tree
 
 function default.grow_new_pine_tree(pos)
-	local path = minetest.get_modpath("default") ..
-		"/schematics/pine_tree_from_sapling.mts"
+	local path
+	if math.random() > 0.5 then
+		path = minetest.get_modpath("default") ..
+			"/schematics/pine_tree_from_sapling.mts"
+	else
+		path = minetest.get_modpath("default") ..
+			"/schematics/small_pine_tree_from_sapling.mts"
+	end
 	minetest.place_schematic({x = pos.x - 2, y = pos.y - 1, z = pos.z - 2},
 		path, "0", nil, false)
 end
@@ -402,8 +363,14 @@ end
 -- New snowy pine tree
 
 function default.grow_new_snowy_pine_tree(pos)
-	local path = minetest.get_modpath("default") ..
-		"/schematics/snowy_pine_tree_from_sapling.mts"
+	local path
+	if math.random() > 0.5 then
+		path = minetest.get_modpath("default") ..
+			"/schematics/snowy_pine_tree_from_sapling.mts"
+	else
+		path = minetest.get_modpath("default") ..
+			"/schematics/snowy_small_pine_tree_from_sapling.mts"
+	end
 	minetest.place_schematic({x = pos.x - 2, y = pos.y - 1, z = pos.z - 2},
 		path, "random", nil, false)
 end
@@ -429,6 +396,58 @@ function default.grow_new_aspen_tree(pos)
 end
 
 
+-- Bushes do not need 'from sapling' schematic variants because
+-- only the stem node is force-placed in the schematic.
+
+-- Bush
+
+function default.grow_bush(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/bush.mts"
+	minetest.place_schematic({x = pos.x - 1, y = pos.y - 1, z = pos.z - 1},
+		path, "0", nil, false)
+end
+
+-- Blueberry bush
+
+function default.grow_blueberry_bush(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/blueberry_bush.mts"
+	minetest.place_schematic({x = pos.x - 1, y = pos.y, z = pos.z - 1},
+		path, "0", nil, false)
+end
+
+
+-- Acacia bush
+
+function default.grow_acacia_bush(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/acacia_bush.mts"
+	minetest.place_schematic({x = pos.x - 1, y = pos.y - 1, z = pos.z - 1},
+		path, "0", nil, false)
+end
+
+
+-- Pine bush
+
+function default.grow_pine_bush(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/pine_bush.mts"
+	minetest.place_schematic({x = pos.x - 1, y = pos.y - 1, z = pos.z - 1},
+		path, "0", nil, false)
+end
+
+
+-- Large cactus
+
+function default.grow_large_cactus(pos)
+	local path = minetest.get_modpath("default") ..
+		"/schematics/large_cactus.mts"
+	minetest.place_schematic({x = pos.x - 2, y = pos.y - 1, z = pos.z - 2},
+		path, "random", nil, false)
+end
+
+
 --
 -- Sapling 'on place' function to check protection of node and resulting tree volume
 --
@@ -437,38 +456,150 @@ function default.sapling_on_place(itemstack, placer, pointed_thing,
 		sapling_name, minp_relative, maxp_relative, interval)
 	-- Position of sapling
 	local pos = pointed_thing.under
-	local node = minetest.get_node(pos)
-	local pdef = minetest.registered_nodes[node.name]
+	local node = minetest.get_node_or_nil(pos)
+	local pdef = node and minetest.registered_nodes[node.name]
+
+	if pdef and pdef.on_rightclick and
+			not (placer and placer:is_player() and
+			placer:get_player_control().sneak) then
+		return pdef.on_rightclick(pos, node, placer, itemstack, pointed_thing)
+	end
+
 	if not pdef or not pdef.buildable_to then
 		pos = pointed_thing.above
-		node = minetest.get_node(pos)
-		pdef = minetest.registered_nodes[node.name]
+		node = minetest.get_node_or_nil(pos)
+		pdef = node and minetest.registered_nodes[node.name]
 		if not pdef or not pdef.buildable_to then
 			return itemstack
 		end
 	end
 
-	local player_name = placer:get_player_name()
+	local player_name = placer and placer:get_player_name() or ""
 	-- Check sapling position for protection
 	if minetest.is_protected(pos, player_name) then
 		minetest.record_protection_violation(pos, player_name)
 		return itemstack
 	end
 	-- Check tree volume for protection
-	if not default.intersects_protection(
+	if minetest.is_area_protected(
 			vector.add(pos, minp_relative),
 			vector.add(pos, maxp_relative),
 			player_name,
 			interval) then
-		minetest.set_node(pos, {name = sapling_name})
-		if not minetest.setting_getbool("creative_mode") then
-			itemstack:take_item()
-		end
-	else
 		minetest.record_protection_violation(pos, player_name)
 		-- Print extra information to explain
-		minetest.chat_send_player(player_name, "Tree will intersect protection")
+		minetest.chat_send_player(player_name,
+		    S("@1 will intersect protection on growth.",
+			itemstack:get_definition().description))
+		return itemstack
+	end
+
+	if placer then
+		default.log_player_action(placer, "places node", sapling_name, "at", pos)
+	end
+
+	local take_item = not minetest.is_creative_enabled(player_name)
+	local newnode = {name = sapling_name}
+	local ndef = minetest.registered_nodes[sapling_name]
+	minetest.set_node(pos, newnode)
+
+	-- Run callback
+	if ndef and ndef.after_place_node then
+		-- Deepcopy place_to and pointed_thing because callback can modify it
+		if ndef.after_place_node(table.copy(pos), placer,
+				itemstack, table.copy(pointed_thing)) then
+			take_item = false
+		end
+	end
+
+	-- Run script hook
+	for _, callback in ipairs(minetest.registered_on_placenodes) do
+		-- Deepcopy pos, node and pointed_thing because callback can modify them
+		if callback(table.copy(pos), table.copy(newnode),
+				placer, table.copy(node or {}),
+				itemstack, table.copy(pointed_thing)) then
+			take_item = false
+		end
+	end
+
+	if take_item then
+		itemstack:take_item()
 	end
 
 	return itemstack
 end
+
+-- Grow sapling
+
+default.sapling_growth_defs = {}
+
+function default.register_sapling_growth(name, def)
+	default.sapling_growth_defs[name] = {
+		can_grow = def.can_grow or default.can_grow,
+		on_grow_failed = def.on_grow_failed or default.on_grow_failed,
+		grow = assert(def.grow)
+	}
+end
+
+function default.grow_sapling(pos)
+	local node = minetest.get_node(pos)
+	local sapling_def = default.sapling_growth_defs[node.name]
+
+	if not sapling_def then
+		minetest.log("warning", "default.grow_sapling called on undefined sapling " .. node.name)
+		return
+	end
+
+	if not sapling_def.can_grow(pos) then
+		sapling_def.on_grow_failed(pos)
+		return
+	end
+
+	minetest.log("action", "Growing sapling " .. node.name .. " at " .. minetest.pos_to_string(pos))
+	sapling_def.grow(pos)
+end
+
+local function register_sapling_growth(nodename, grow)
+	default.register_sapling_growth("default:" .. nodename, {grow = grow})
+end
+
+if minetest.get_mapgen_setting("mg_name") == "v6" then
+	register_sapling_growth("sapling", function(pos)
+		default.grow_tree(pos, random(1, 4) == 1)
+	end)
+	register_sapling_growth("junglesapling", default.grow_jungle_tree)
+	register_sapling_growth("pine_sapling", function(pos)
+		local snow = is_snow_nearby(pos)
+		default.grow_pine_tree(pos, snow)
+	end)
+else
+	register_sapling_growth("sapling", default.grow_new_apple_tree)
+	register_sapling_growth("junglesapling", default.grow_new_jungle_tree)
+	register_sapling_growth("pine_sapling", function(pos)
+		local snow = is_snow_nearby(pos)
+		if snow then
+			default.grow_new_snowy_pine_tree(pos)
+		else
+			default.grow_new_pine_tree(pos)
+		end
+	end)
+end
+
+register_sapling_growth("acacia_sapling", default.grow_new_acacia_tree)
+register_sapling_growth("aspen_sapling", default.grow_new_aspen_tree)
+register_sapling_growth("bush_sapling", default.grow_bush)
+register_sapling_growth("blueberry_bush_sapling", default.grow_blueberry_bush)
+register_sapling_growth("acacia_bush_sapling", default.grow_acacia_bush)
+register_sapling_growth("pine_bush_sapling", default.grow_pine_bush)
+register_sapling_growth("emergent_jungle_sapling", default.grow_new_emergent_jungle_tree)
+
+-- Backwards compatibility for saplings that used to use ABMs; does not need to include newer saplings.
+minetest.register_lbm({
+	name = "default:convert_saplings_to_node_timer",
+	nodenames = {"default:sapling", "default:junglesapling",
+			"default:pine_sapling", "default:acacia_sapling",
+			"default:aspen_sapling"},
+	action = function(pos)
+		minetest.get_node_timer(pos):start(math.random(300, 1500))
+	end
+})
